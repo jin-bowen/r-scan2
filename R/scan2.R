@@ -46,12 +46,14 @@ check.chunked <- function(object, message) {
         warning(message)
 }
 
-genome.string.to.seqinfo.object <- function(genome=c('hs37d5', 'hg38', 'mm10')) {
+genome.string.to.seqinfo.object <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.0', 'mm10')) {
     genome <- match.arg(genome)
     if (genome == 'hs37d5') {
         return(GenomeInfoDb::Seqinfo(genome='GRCh37.p13'))
     } else if (genome == 'hg38') {
         return(GenomeInfoDb::Seqinfo(genome='hg38'))
+    } else if (genome == 'CHM13v2.0') {
+        return(GenomeInfoDb::Seqinfo(genome='T2T-CHM13v2.0'))
     } else if (genome == 'mm10') {
         return(GenomeInfoDb::Seqinfo(genome='mm10'))
     } else {
@@ -60,7 +62,7 @@ genome.string.to.seqinfo.object <- function(genome=c('hs37d5', 'hg38', 'mm10')) 
     }
 }
 
-genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'mm10')) {
+genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.0','mm10')) {
     genome <- match.arg(genome)
 
     if (genome == 'hs37d5') {
@@ -69,6 +71,9 @@ genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'mm10'))
     } else if (genome == 'hg38') {
         require(BSgenome.Hsapiens.UCSC.hg38)
         genome <- BSgenome.Hsapiens.UCSC.hg38
+    } else if (genome == 'CHM13v2.0') {
+        require(BSgenome.Hsapiens.NCBI.T2T.CHM13v2.0)
+        genome <- BSgenome.Hsapiens.NCBI.T2T.CHM13v2.0
     } else if (genome == 'mm10') {
         require(BSgenome.Mmusculus.UCSC.mm10)
         genome <- BSgenome.Mmusculus.UCSC.mm10
@@ -79,13 +84,15 @@ genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'mm10'))
     genome
 }
 
-genome.string.to.tiling <- function(genome=c('hs37d5', 'hg38', 'mm10'), tilewidth=10e6, group=c('auto', 'sex', 'circular', 'all')) {
+genome.string.to.tiling <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.0', 'mm10'), tilewidth=10e6, group=c('auto', 'sex', 'circular', 'all')) {
     genome <- match.arg(genome)
     group <- match.arg(group)
 
     if (genome == 'hs37d5') {
         species <- 'Homo_sapiens'
     } else if (genome == 'hg38') {
+        species <- 'Homo_sapiens'
+    } else if (genome == 'CHM13v2.0') {
         species <- 'Homo_sapiens'
     } else if (genome == 'mm10') {
         species <- 'Mus_musculus'
@@ -103,7 +110,7 @@ genome.string.to.tiling <- function(genome=c('hs37d5', 'hg38', 'mm10'), tilewidt
     grs
 }
 
-make.scan <- function(single.cell, bulk, genome=c('hs37d5', 'hg38', 'mm10'), region=NULL) {
+make.scan <- function(single.cell, bulk, genome=c('hs37d5', 'hg38', 'CHM13v2.0', 'mm10'), region=NULL) {
     genome <- match.arg(genome)
     new("SCAN2", single.cell=single.cell, bulk=bulk,
         genome.string=genome,
