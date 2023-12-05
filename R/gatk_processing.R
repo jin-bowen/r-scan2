@@ -195,7 +195,7 @@ annotate.gatk <- function(gatk, genome.string, add.mutsig=TRUE) {
                                genome=genome.string.to.bsgenome.object(genome.string))]
 	       
 
-	chs_list = list()
+	chs_list = c()
 	for(i in 1:nrow(gatk[muttype == 'indel'])) {
 	    chr=gatk[muttype == 'indel'][i,]$chr
 	    pos=gatk[muttype == 'indel'][i,]$pos

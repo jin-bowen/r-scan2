@@ -133,7 +133,7 @@ make.integrated.table <- function(mmq60.tab, mmq1.tab, phased.vcf,
     indel.max.bulk.alt=0, indel.max.bulk.af=0,
     panel=NULL,
     grs=genome.string.to.tiling(genome, tilewidth=10e6, group='auto'),
-    legacy=FALSE, quiet=TRUE, report.mem=FALSE, add.mutsig=FALSE)
+    legacy=FALSE, quiet=TRUE, report.mem=FALSE)
 {
     cat('Starting integrated table pipeline on', length(grs), 'chunks.\n')
     cat('Parallelizing with', future::nbrOfWorkers(), 'cores.\n')
@@ -156,7 +156,7 @@ make.integrated.table <- function(mmq60.tab, mmq1.tab, phased.vcf,
 
                 annotate.gatk.counts(gatk.meta=sitewide, gatk=samplespecific,
                     bulk.sample=bulk.sample, sc.samples=sc.samples, legacy=legacy, quiet=quiet)
-                annotate.gatk(gatk=sitewide, genome.string=genome, add.mutsig=add.mutsig)
+                annotate.gatk(gatk=sitewide, genome.string=genome)
                 annotate.gatk.lowmq(sitewide, path=mmq1.tab, bulk=bulk.sample, region=gr, quiet=quiet)
                 annotate.gatk.phasing(sitewide, phasing.path=phased.vcf, region=gr, quiet=quiet)
                 annotate.gatk.panel(sitewide, panel.path=panel, region=gr, quiet=quiet)

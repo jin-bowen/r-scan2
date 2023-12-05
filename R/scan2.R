@@ -106,8 +106,6 @@ genome.string.to.tiling <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.0', 'mm1
     chroms.to.tile <-
         GenomeInfoDb::extractSeqlevelsByGroup(species=species, style=GenomeInfoDb::seqlevelsStyle(sqi)[1], group=group)
 
-    chroms.to.tile = paste0("chr", chroms.to.tile)
-
     grs <- GenomicRanges::tileGenome(seqlengths=sqi[chroms.to.tile], tilewidth=tilewidth, cut.last.tile.in.chrom=TRUE)
     grs
 }
