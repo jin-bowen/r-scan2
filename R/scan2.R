@@ -53,7 +53,7 @@ genome.string.to.seqinfo.object <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.
     } else if (genome == 'hg38') {
         return(GenomeInfoDb::Seqinfo(genome='hg38'))
     } else if (genome == 'CHM13v2.0') {
-        return(GenomeInfoDb::Seqinfo(genome='T2T-CHM13v2.0'))
+	return(GenomeInfoDb::Seqinfo(genome='hs1'))
     } else if (genome == 'mm10') {
         return(GenomeInfoDb::Seqinfo(genome='mm10'))
     } else {
@@ -72,8 +72,8 @@ genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'CHM13v2
         require(BSgenome.Hsapiens.UCSC.hg38)
         genome <- BSgenome.Hsapiens.UCSC.hg38
     } else if (genome == 'CHM13v2.0') {
-        require(BSgenome.Hsapiens.NCBI.T2T.CHM13v2.0)
-        genome <- BSgenome.Hsapiens.NCBI.T2T.CHM13v2.0
+        require(BSgenome.Hsapiens.UCSC.hs1)
+	genome <- BSgenome.Hsapiens.UCSC.hs1
     } else if (genome == 'mm10') {
         require(BSgenome.Mmusculus.UCSC.mm10)
         genome <- BSgenome.Mmusculus.UCSC.mm10
@@ -104,7 +104,9 @@ genome.string.to.tiling <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.0', 'mm1
     sqi <- genome.string.to.seqinfo.object(genome)
     # seqlevelsStyle()[1] - 'hs37d5' returns both NCBI and Ensembl as styles, pick the first one
     chroms.to.tile <-
-        GenomeInfoDb::extractSeqlevelsByGroup(species=species, style=seqlevelsStyle(sqi)[1], group=group)
+        GenomeInfoDb::extractSeqlevelsByGroup(species=species, style=GenomeInfoDb::seqlevelsStyle(sqi)[1], group=group)
+
+    chroms.to.tile = paste0("chr", chroms.to.tile)
 
     grs <- GenomicRanges::tileGenome(seqlengths=sqi[chroms.to.tile], tilewidth=tilewidth, cut.last.tile.in.chrom=TRUE)
     grs
