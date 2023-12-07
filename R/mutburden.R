@@ -22,6 +22,12 @@ get.gbp.by.genome <- function(object) {
         chry <- 91744698
         chrm <- 16299
         return((total - chrx - chry - chrm)*2 / 1e9) # = 4.936158956
+    } else if (object@genome.string == 'CHM13v2.0') {
+        total <- 3117292070
+        chrx <- 154259566
+        chry <- 62460029
+        chrm <- 16569
+        return((total - chrx - chry - chrm)*2 / 1e9)
     } else {
         warn(paste('gbp not yet implemented for genome', object@genome.string))
         warn("the mutation burden for this analysis is a placeholder!")
