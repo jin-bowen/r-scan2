@@ -153,7 +153,7 @@ setMethod("mutburden", "SCAN2", function(object, muttype=c('all', 'snv', 'indel'
         }
         if (mt == 'indel' & (object@call.mutations$suppress.all.indels | object@call.mutations$suppress.shared.indels)) {
             warning("indel mutation burden estimates ARE NOT VALID (cross-sample panel insufficiency)!")
-            ret <- NA
+#           ret <- NA
         }
         ret
     })

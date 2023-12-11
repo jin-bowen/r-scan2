@@ -201,6 +201,10 @@ annotate.gatk <- function(gatk, genome.string, add.mutsig=TRUE) {
 	    pos=gatk[muttype == 'indel'][i,]$pos
 	    refnt=gatk[muttype == 'indel'][i,]$refnt
 	    altnt=gatk[muttype == 'indel'][i,]$altnt
+
+            # added due to weird error in NA in tabix file
+            if ( (!is.character(refnt)) | (!is.character(altnt)) ) { next }
+
 	    chs=attribution_of_indels(genome=genome.string.to.bsgenome.object(genome.string),
 				in_CHROM=chr, in_POS=pos, in_REF=refnt, in_ALT=altnt)
 	    chs_list = c(chs_list, chs)

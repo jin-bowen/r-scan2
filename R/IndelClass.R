@@ -19,9 +19,13 @@ attribute_sequence_contex_indel <- function(genome, in_CHROM, in_POS,
   out_dat$POS <- in_POS
   out_dat$REF <- in_REF
   out_dat$ALT <- in_ALT
- 
-  ref_length <- length(unlist(strsplit(in_REF, split="")))
-  alt_length <- length(unlist(strsplit(in_ALT, split="")))
+
+#  if (!is.character(in_REF)) {
+#    print(out_dat)
+#  }
+
+  ref_length <- nchar(in_REF)
+  alt_length <- nchar(in_ALT)
   if(ref_length > alt_length){
     out_dat$Type <- "Del"
     context_list <- getSequenceContext(genome = genome,
