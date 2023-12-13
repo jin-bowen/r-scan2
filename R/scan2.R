@@ -876,9 +876,21 @@ setMethod("call.mutations", "SCAN2", function(object, target.fdr=0.01, quiet=FAL
     suppress.all.indels <- max(object@gatk$unique.cells, na.rm=TRUE) <= 2
 
     # Pass somatic mutations
+#    object@gatk[, pass := static.filter == TRUE &
+#        (muttype == 'snv' | (!suppress.all.indels & (!suppress.shared.indels | unique.cells == 1))) &
+#        lysis.fdr <= target.fdr & mda.fdr <= target.fdr]
+
+## allow inclusion of indel without cross-sample panel
     object@gatk[, pass := static.filter == TRUE &
         (muttype == 'snv' | (!suppress.all.indels & (!suppress.shared.indels | unique.cells == 1))) &
         lysis.fdr <= target.fdr & mda.fdr <= target.fdr]
+ 
+    if (!suppress.all.indels) {
+    object@gatk[, condition.pass := static.filter == TRUE & (muttype == 'indel' | (!suppress.all.indels & (!suppress.shared.indels | unique.cells == 1))) & 
+               lysis.fdr <= target.fdr & mda.fdr <= target.fdr]
+    } else {
+    object@gatk[, condition.pass := static.filter == TRUE & (muttype == 'indel') & lysis.fdr <= target.fdr & mda.fdr <= target.fdr]
+    }
 
     # Pass germline heterozygous sites using L-O-O for sensitivity estimation
     object@gatk[training.site == TRUE,
@@ -898,6 +910,7 @@ setMethod("call.mutations", "SCAN2", function(object, target.fdr=0.01, quiet=FAL
               snv.resampled.training.pass=as.integer(sum(resampled.training.site & training.pass, na.rm=TRUE)))])),
         as.list(unlist(object@gatk[muttype == 'indel',
             .(indel.pass=as.integer(sum(pass, na.rm=TRUE)),
+              indel.condition.pass=as.integer(sum(condition.pass, na.rm=TRUE)),
               indel.resampled.training.pass=as.integer(sum(resampled.training.site & training.pass, na.rm=TRUE)))])),
         list(target.fdr=target.fdr,
             suppress.shared.indels=suppress.shared.indels,
