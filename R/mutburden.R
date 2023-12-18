@@ -70,7 +70,6 @@ setMethod("compute.mutburden", "SCAN2", function(object, gbp.per.genome=get.gbp.
         } else {
             # somatic sites
             s <- object@gatk[pass == TRUE & muttype == mt]
-            }
 
             # Break data into 4 quantiles based on depth, use the middle 2 (i.e.,
             # middle 50%) to reduce noise caused by very low and very high depth.

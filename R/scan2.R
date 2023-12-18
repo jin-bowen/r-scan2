@@ -898,7 +898,7 @@ setMethod("call.mutations", "SCAN2", function(object, target.fdr=0.01, quiet=FAL
               snv.resampled.training.pass=as.integer(sum(resampled.training.site & training.pass, na.rm=TRUE)))])),
         as.list(unlist(object@gatk[muttype == 'indel',
             .(indel.pass=as.integer(sum(pass, na.rm=TRUE)),
-              indel.condition.pass=as.integer(sum(condition.pass, na.rm=TRUE)),
+#              indel.condition.pass=as.integer(sum(condition.pass, na.rm=TRUE)),
               indel.resampled.training.pass=as.integer(sum(resampled.training.site & training.pass, na.rm=TRUE)))])),
         list(target.fdr=target.fdr,
             suppress.shared.indels=suppress.shared.indels,
