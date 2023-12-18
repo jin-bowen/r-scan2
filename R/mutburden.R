@@ -69,9 +69,6 @@ setMethod("compute.mutburden", "SCAN2", function(object, gbp.per.genome=get.gbp.
             )[c(1,1,1),]  # repeat row 1 3 times
         } else {
             # somatic sites
-            if (mt == 'indel') {
-            s <- object@gatk[condition.pass == TRUE & muttype == mt]
-            } else { 
             s <- object@gatk[pass == TRUE & muttype == mt]
             }
 
@@ -157,7 +154,7 @@ setMethod("mutburden", "SCAN2", function(object, muttype=c('all', 'snv', 'indel'
         }
         if (mt == 'indel' & (object@call.mutations$suppress.all.indels | object@call.mutations$suppress.shared.indels)) {
             warning("indel mutation burden estimates ARE NOT VALID (cross-sample panel insufficiency)!")
-#           ret <- NA
+            ret <- NA
         }
         ret
     })
