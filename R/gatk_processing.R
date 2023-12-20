@@ -196,7 +196,6 @@ annotate.gatk <- function(gatk, genome.string, add.mutsig=TRUE) {
 	       
         gatk_indel <- gatk[muttype == 'indel'] 
 
-	chs_list <- rep('NA',nrow(gatk_indel))
 #	for(i in 1:nrow(gatk_indel)) {
 #	    chr=gatk_indel$chr[i]
 #	    pos=gatk_indel$pos[i]
@@ -213,21 +212,21 @@ annotate.gatk <- function(gatk, genome.string, add.mutsig=TRUE) {
 #        #chs <- classify.indels(gatk[muttype == 'indel'], genome.string=genome.string)
 #        gatk[muttype == 'indel', mutsig := chs_list]
 
-
-        lapply(1:nrow(gatk_indel), function(i) {
+	chs_list <- rep('NA',nrow(gatk_indel))
+        chs_list <- lapply(1:nrow(gatk_indel), function(i) {
 	    chr=gatk_indel$chr[i]
 	    pos=gatk_indel$pos[i]
 	    refnt=gatk_indel$refnt[i]
 	    altnt=gatk_indel$altnt[i]
 
             # added due to weird error in NA in tabix file
-            if ( (!is.character(refnt)) | (!is.character(altnt)) ) { next }
+            if ( (!is.character(refnt)) | (!is.character(altnt)) ) { "NA" }
 
 	    chs=attribution_of_indels(genome=genome.string.to.bsgenome.object(genome.string),
 				in_CHROM=chr, in_POS=pos, in_REF=refnt, in_ALT=altnt)
-	    chs_list[i] <- chs
+	    chs
         })
-        gatk[muttype == 'indel', mutsig := chs_list] 
+        gatk[muttype == 'indel', mutsig := unlist(chs_list)] 
 
      }
 }
