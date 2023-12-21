@@ -195,7 +195,7 @@ annotate.gatk <- function(gatk, genome.string, add.mutsig=TRUE) {
                                genome=genome.string.to.bsgenome.object(genome.string))]
 	       
         gatk_indel <- gatk[muttype == 'indel'] 	
-        if (nrow(gatk_indel) == 0) { next }
+        if (nrow(gatk_indel) == 0) { break }
 
 #	for(i in 1:nrow(gatk_indel)) {
 #	    chr=gatk_indel$chr[i]
