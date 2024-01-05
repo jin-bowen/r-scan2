@@ -64,8 +64,8 @@ attribution_of_indels <-function(genome, in_CHROM, in_POS,in_REF,in_ALT) {
 	alt_length <- nchar(in_ALT)
 	max_length <- max(ref_length,alt_length)
 
-	in_offsetL = max(5*max_length,50)
-	in_offsetR = max(5*max_length,50)
+	in_offsetL = max(6*max_length,50)
+	in_offsetR = max(6*max_length,50)
 
 	in_dat_return <- attribute_sequence_contex_indel(genome=genome, 
 					in_CHROM=in_CHROM, 
@@ -108,7 +108,7 @@ attribution_of_indels <-function(genome, in_CHROM, in_POS,in_REF,in_ALT) {
 			in_dat_return$key3='NA' }
 		#####define key4 for repeats
 		i=0
-		rep_size = c(1,2,3,4,5)
+		rep_size = c(1,2,3,4,5,6)
 		for ( irep in rep_size)	{
 			if(irep %in%  start(match)){
 				i = i + 1
@@ -119,7 +119,7 @@ attribution_of_indels <-function(genome, in_CHROM, in_POS,in_REF,in_ALT) {
 	}else{
 		###repeats
 		i=0
-		rep_size = c(1,2,3,4,5)
+		rep_size = c(1,2,3,4,5,6)
 		for(irep in rep_size){
 			match_site = 1 + i * motif_length
 			if(match_site %in% start(match)){
