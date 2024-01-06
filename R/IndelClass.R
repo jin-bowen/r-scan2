@@ -114,7 +114,7 @@ attribution_of_indels <-function(genome, in_CHROM, in_POS,in_REF,in_ALT) {
 				i = i + 1
 			}else{  break  }
 		}	
-		repeat_size = i
+		repeat_size = min(i,5)
 		in_dat_return$key4=repeat_size
 	}else{
 		###repeats
@@ -126,7 +126,7 @@ attribution_of_indels <-function(genome, in_CHROM, in_POS,in_REF,in_ALT) {
 				i = i + 1
 			}else{  break  }
 		}
-		repeat_size = i
+		repeat_size = min(i,5)
 
 		####also check for microhomology if it is a insertion
 		if(in_dat_return$Type=='Del'){
