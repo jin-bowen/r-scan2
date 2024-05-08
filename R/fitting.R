@@ -5,6 +5,7 @@ abmodel.fit.one.chrom <- function(path, sc.sample, chrom, genome.seqinfo,
     hsnp.tilesize=100, n.tiles=250,
     refine.n.steps=4, refine.top.n=50,
     logp.samples.per.step=20000,
+    hsnp.tile.downsample.seed=1,
     alim=c(-7, 2), blim=c(2, 4), clim=c(-7, 2), dlim=c(2, 6))
 {
     chrom <- as.character(chrom)
@@ -18,11 +19,12 @@ abmodel.fit.one.chrom <- function(path, sc.sample, chrom, genome.seqinfo,
     # GRanges interval that covers the whole chromosome
     region <- as(genome.seqinfo, 'GRanges')[chrom,]
     hsnps <- read.training.hsnps(path=path, sample.id=sc.sample, region=region)
-    hsnps <- abmodel.downsample.hsnps(hsnps, hsnp.tilesize=hsnp.tilesize, n.tiles=n.tiles, verbose=TRUE)
+    hsnps <- abmodel.downsample.hsnps(hsnps, hsnp.tilesize=hsnp.tilesize, n.tiles=n.tiles,
+        seed=hsnp.tile.downsample.seed, verbose=TRUE)
 
     refine.records <- list()
     for (i in 1:refine.n.steps) {
-    cat('Chrom:', chrom, 'refinement step', i, 'n.chunks', n.chunks, '\n')
+        cat('Chrom:', chrom, 'refinement step', i, 'n.chunks', n.chunks, '\n')
             refine.record <- abmodel.refine.parameter.space(
                 hsnps, n.chunks=n.chunks, n.logp.samples.per.chunk=n.logp.samples.per.chunk,
                 top.n=refine.top.n, hsnp.tilesize=hsnp.tilesize,
@@ -45,13 +47,16 @@ abmodel.fit.one.chrom <- function(path, sc.sample, chrom, genome.seqinfo,
 }
 
 
-abmodel.downsample.hsnps <- function(hsnps, hsnp.tilesize=100, n.tiles=250, verbose=TRUE) {
+# As name suggests, a random sample is taken here. Must expose a seed so
+# results are reproducible.
+abmodel.downsample.hsnps <- function(hsnps, hsnp.tilesize=100, n.tiles=250, seed=1, verbose=TRUE) {
     if (is.null(n.tiles)) {
         if (verbose) cat('skipping downsampling; n.tiles=NULL\n')
         return(hsnps)
     }
     # Now subset by tiles. This is critical for compute efficiency (>10-fold
     # reduction in runtime with very similar results).
+    set.seed(seed)
     hsnps$tile.id <- head(rep(1:nrow(hsnps), each=hsnp.tilesize), nrow(hsnps))
     max.tile <- max(hsnps$tile.id)
     tiles.to.use <- sort(sample(max.tile, min(max.tile, n.tiles)))
@@ -197,12 +202,41 @@ alg3.2.2 <- function(a, b, c, d, ctx, Xnew) {
     K <- outer(ctx$x, ctx$x, K.func, a=a, b=b, c=c, d=d)
     covK <- outer(ctx$x, Xnew, K.func, a=a, b=b, c=c, d=d)
 
+    # The sigmoid function s(x) = e(x)/(1+e(x)) is not numerically stable for
+    # large positive x; in VERY rare circumstances (only once in 600 single
+    # cells), this can lean to an overflow (=Infinity in R), which will trigger
+    # the stop() at the end of this function.
+    #
+    # A safer s(x) exploits the identity e^x/1+e^x = 1/1+e^-x.  For large x,
+    # the latter formulation easily gets e^-x = 0 while the former will overflow
+    # with Inf/1+Inf.  safe.s uses the first form of the sigmoid function
+    # when x<0 and the second form when x>0.  I would implement this, but I'm not
+    # sure what to do in the next line where we have e^x/(1+e^x)^2.
+    #
+    # note this is only "safer", not really safe.  it underflows around x=-746
+    # and becomes numerically 1 (i.e., up to R's "==" precision) at x=37.
+    # However, it never returns +/- Inf.
+    safer.s <- function(x) ifelse(x <= 0, exp(x)/(1+exp(x)), 1/(1+exp(-x)))
+
     # Infer the GP at some new positions Xnew
     # ( Y - d...) is del log p(Y|B=mode)
-    mean.new <- t(covK) %*% (ctx$y - ctx$d * exp(mode) / (1 + exp(mode)))
+    #mean.new <- t(covK) %*% (ctx$y - ctx$d * exp(mode) / (1 + exp(mode)))
+    mean.new <- t(covK) %*% (ctx$y - ctx$d * safer.s(mode))
+
+
+    # s2(x) = e^x / (1+e^x)^2 has the same stability issue as s(x).
+    # decompose this into two s(x) functions via:
+    #
+    # e^x / (1+e^x)^2 = e^x/(1+e^x) * 1/(1+e^x)
+    #                   = s(x) * 1/(1+e^x)
+    #                   = s(x) * s(-x)          since 1/(1+e^x) = e^-x/(1+e^-x) = s(-x)
+    #
+    # as noted above, this is only "safer" in that it is finite, but it
+    # underflows (becomes numerically 0) when safe.s(x) does (x=-746).
 
     # v satisfies: v^T v = k(X_sSNV, X)^T (K + W^-1)^-1 k(X_sSNV, X)
-    W <- ctx$d * exp(mode) / (1 + exp(mode))^2
+    #W <- ctx$d * exp(mode) / (1 + exp(mode))^2
+    W <- ctx$d * safer.s(mode) * safer.s(-mode)
     sqrtW <- sqrt(W)
     L <- t(chol(diag(length(ctx$x)) + outer(sqrtW, sqrtW) * K))
     v <- forwardsolve(L, outer(sqrtW, rep(1, ncol(covK))) * covK)

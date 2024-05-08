@@ -18,9 +18,11 @@ get.training.sites.for.abmodel.by.range <- function(region, integrated.table.pat
 
         # trim() always generates a warning for first and last regions on a chromosome
         # because adding/subtracting flank goes outside of the chromosome boundaries.
-        extended.range <- trim(GRanges(seqnames=seqnames(region)[1],
-            ranges=IRanges(start=start(region)-flank, end=end(region)+flank),
+        extended.range <- GenomicRanges::trim(
+            GenomicRanges::GRanges(seqnames=seqnames(region)[1],
+                ranges=IRanges(start=start(region)-flank, end=end(region)+flank),
                 seqinfo=seqinfo(region)))
+
         extended.training.hsnps <- read.training.hsnps(integrated.table.path,
             sample.id=single.cell.id, region=extended.range, quiet=quiet)
         if (!quiet)
@@ -42,14 +44,16 @@ get.training.sites.for.abmodel <- function(object, region,
 {
     # if this is a chunked object, extend hSNPs up/downstream so that full info is available at edges
     if (!is.null(region)) {
+        flanks.to.try <- 10^(5:8)
         training.hsnps <- get.training.sites.for.abmodel.by.range(region=region,
-            integrated.table.path=integrated.table.path, single.cell.id=object@single.cell, quiet=quiet)
+            integrated.table.path=integrated.table.path, single.cell.id=object@single.cell,
+            flanks.to.try=flanks.to.try, quiet=quiet)
 
         # nrow(object@gatk) > 0: don't give up in heterochromatic arms of, e.g., chr13
         # where there are neither hSNPs nor somatic candidates.
         if (nrow(training.hsnps) < 2 & nrow(object@gatk) > 0) {
             stop(sprintf("%d hSNPs found within %d bp of %s:%d-%d, need at least 2; giving up",
-                nrow(training.hsnps), flank,
+                nrow(training.hsnps), max(flanks.to.try),
                 seqnames(region)[1], start(region)[1], end(region)[1]))
         }
     } else {
@@ -74,7 +78,8 @@ compute.ab.given.sites.and.training.data <- function(sites, training.hsnps, ab.f
         time.elapsed <- system.time(z <- infer.gp1(ssnvs=sites, fit=ab.fit,
             hsnps=hsnps, flank=1e5, verbose=!quiet))
         if (!quiet) print(time.elapsed)
-        z
+        # z is a matrix
+        as.data.table(z)
     }
     if (length(chroms) == 1) {
         # slightly more efficient for real use cases with chunked computation
@@ -101,8 +106,17 @@ compute.ab.given.sites.and.training.data <- function(sites, training.hsnps, ab.f
 
 
 # Very simple approximation of how correlation is affected by binomial sampling.
+# Generate correlated normal pairs, which represent a pair of hSNP VAFs (p1, p2).
+# Then sample observed VAFs via {x1,x2}/depth where x1 ~ Bin(p1, depth), x2 ~ Bin(p2, depth)
+# Then calculate observed correlation of the observed VAF pairs.
+#
+# n.samples=1e4 is still a little noisy, especially for low depth.
+#
+# There are many reasons why this is not a particularly accurate model of our
+# data. Its results are only used in diagnostics.
 binomial.effect.on.correlation <- function(cor, depth, n.samples=1e4) {
     # latent variable in normal space
+    # Note to self: mvnfast doesn't improve
     L <- MASS::mvrnorm(n=n.samples, mu=c(0,0), Sigma=matrix(c(1,cor,cor,1),nrow=2))
     # Transform into [0,1] space
     B <- 1/(1+exp(-L))
@@ -114,26 +128,66 @@ binomial.effect.on.correlation <- function(cor, depth, n.samples=1e4) {
 
 
 # get an approximate idea of correlation between training hSNPs
-# by only looking at adjacent hSNPs. d is the distance between
-# them and (phaf, phaf2) are the allele frequencies of hSNP i
+# by only looking at adjacent hSNPs. dist is the distance between
+# them and (phased.af.x, phased.af.y) are the allele frequencies of hSNP i
 # and its upstream neighbor hSNP i+1.
+#
+# bin.breaks - hSNP pairs are grouped into bins based on the distance
+#       between the two hSNPs to compute the observed AF correlation.
+#       bin.breaks defines the distance break points for this binning. 
+#       CAUTION: this function can fail if bin.breaks creates very
+#       small bins (in which there are few or no hSNP pairs).
 approx.abmodel.covariance <- function(object, bin.breaks=10^(0:5)) {
-    z <- object@gatk[training.site==TRUE & muttype=='snv',
-        .(phased.dp=phased.hap1 + phased.hap2, d=c(diff(pos),0), phaf=phased.hap1/(phased.hap1+phased.hap2))][, phafd:=c(diff(phaf),0)][, phaf2 := phaf+phafd]
+    # Create a much smaller data.table (~50 Mb for humans) so copying won't be problematic
+    tiny.gatk <- object@gatk[training.site == TRUE & muttype == 'snv', .(chr, pos, phased.dp=phased.hap1 + phased.hap2, phased.af=phased.hap1/(phased.hap1 + phased.hap2))]
+    setkey(tiny.gatk, chr)   # make chr==this.chr filters fast
 
-    # bin the adjacent hSNPs by the distance between them
-    z[d < 1e5, cut := cut(d, breaks=bin.breaks, ordered_result=T)]
+    ret <- rbindlist(lapply(object@gatk[,chr[1],by=chr]$chr, function(this.chr) {
+        # "Join" (just put side-by-side) tiny.gatk[1:n-1,] and tiny.gatk[2:n,]
+        z <- tiny.gatk[chr == this.chr]
+        z <- cbind(z[-nrow(z), .(chr.x=chr, pos.x=pos, phased.dp.x=phased.dp, phased.af.x=phased.af)],
+                   z[-1,       .(chr.y=chr, pos.y=pos, phased.dp.y=phased.dp, phased.af.y=phased.af)])
+        z[, dist := pos.y - pos.x]
+
+        # bin the adjacent hSNPs by the distance between them
+        z[, bin := cut(dist, breaks=bin.breaks, ordered_result=T)]
+        z[, bin.min := bin.breaks[as.integer(bin)]]
+        z[, bin.max := bin.breaks[as.integer(bin)+1]]
     
-    # make depth integer for easier indexing into inverse functions
-    ret <- z[!is.na(cut), .(observed.cor=cor(phaf,phaf2,use='complete.obs'),
-                            mean.dp=as.integer(mean(phased.dp))), by=cut][order(cut)]
+        # use=na.or.complete is identical to use=complete.obs, except if there
+        # are no observations (like on a female chrY), NA is returned instead
+        # of throwing an error.
+        ret <- z[!is.na(bin), .(chr=this.chr,
+                         n.pairs=nrow(.SD),       # how many hSNP pairs in total?
+                         # how many hSNP pairs have non-NA AFs?
+                         n.complete.pairs=sum(!is.na(phased.af.x) & !is.na(phased.af.y)), 
+                         bin.min=bin.min[1],      # bin.min/max just correspond to bin.breaks
+                         bin.max=bin.max[1],
+                         mean.dist=mean(dist),
+                         max.dist=max(dist),
+                         observed.cor=cor(phased.af.x, phased.af.y, use='na.or.complete'),
+                         # mean.dp is used to infer the latent correlation after binomial
+                         # sampling error.  a proper model would account for the distinct
+                         # depths at each of the hSNP locations, but since this function
+                         # only serves as a diagnostic, we use a less correct (but still
+                         # useful) model that only considers depth of the first hSNP in
+                         # each pair.
+                         mean.dp=as.integer(mean(phased.dp.x))), by=bin][order(bin)]
 
+        # pmin/pmax: avoid cor=1 or -1 because the binomial sampling correction can fail
+        # mask correlation calculations (with NA) when only 1 or 2 observations exist.
+        ret[, observed.cor := pmax(-0.99, pmin(0.99, ifelse(n.complete.pairs < 3, NA, observed.cor)))]
+    }))
+
+    # None of the below changes from chromosome to chromomsome
     # get a rough inverse function of (observed correlation, dp) -> (underlying correlation, dp)
     all.dps <- unique(as.integer(ret$mean.dp))
     inverse.fns.by.depth <- setNames(lapply(all.dps, function(depth) {
+        if (depth == 0)
+            return(function(x) NA)
         # use a linear interpolation on the approximate relationship between
         # sampling correlation (on the latent variable) and observed correlation (after binomial sampling)
-        sampling.cor <- seq(0.01, 1, length.out=50)
+        sampling.cor <- seq(-0.99, 0.99, length.out=50)
         interp.points <- sapply(sampling.cor, binomial.effect.on.correlation, depth=depth)
         # rule=2: when observations are outside of the observed range, returns the boundary value
         approxfun(x=interp.points, y=sampling.cor, rule=2)  # returns a function
@@ -142,11 +196,8 @@ approx.abmodel.covariance <- function(object, bin.breaks=10^(0:5)) {
     # data.table complains about recursive indexing if i try to do this in a := statement
     corrected.cor <- sapply(1:nrow(ret), function(i) inverse.fns.by.depth[[as.character(ret$mean.dp[i])]](ret$observed.cor[i]))
     ret[, corrected.cor := corrected.cor]
-    ret[, max.d := bin.breaks[-1]]
 
     ret
-    #data.frame(x=bin.breaks[-1],
-        #y=z[!is.na(cut), .(cor=cor(phaf,phaf2,use='complete.obs')), by=cut][order(cut)]$cor)
 }
 
 
@@ -272,12 +323,17 @@ bin.afs <- function(afs, bins=20) {
 # another function for that provides a better estimate!
 estimate.somatic.burden <- function(fc, min.s=1, max.s=5000, n.subpops=10, display=FALSE, rough.interval=0.99) {
     sim <- function(n.muts, g, s, n.samples=1000, diagnose=FALSE) {
-        samples <- rmultinom(n=n.samples, size=n.muts, prob=g)
+        n.pass <- .colSums(rmultinom(n=n.samples, size=n.muts, prob=g) <= s, m=length(g), n=n.samples)
         if (diagnose) {
             boxplot(t(samples))
             lines(s, lwd=2, col=2)
         }
-        mean(apply(samples, 2, function(col) all(col <= s)))
+        # if the random mutations fit underneath the germline curve at
+        # every AF bin, then the .colSums() above will equal the number
+        # of AF bins (which is length(g)).
+	    ret <- sum(n.pass == length(g))/length(n.pass)
+	    #gc()   # XXX: it is waaay too slow to gc() on every simulation
+	    ret
     }
 
     # determine how often a sample of N somatic mutations from the
@@ -299,7 +355,7 @@ estimate.somatic.burden <- function(fc, min.s=1, max.s=5000, n.subpops=10, displ
 
 # {germ,som}.df need only have columns named dp and af
 # estimate the population component of FDR
-fcontrol <- function(germ.df, som.df, bins=20, rough.interval=0.99, eps=0.1) {
+fcontrol <- function(germ.df, som.df, bins=20, rough.interval=0.99, eps=0.1, quiet=FALSE) {
     germ.afs <- germ.df$af[!is.na(germ.df$af) & germ.df$af > 0]
     som.afs <- som.df$af[!is.na(som.df$af)]
     g <- bin.afs(germ.afs, bins=bins)  # counts, not probabilities
@@ -321,9 +377,11 @@ fcontrol <- function(germ.df, som.df, bins=20, rough.interval=0.99, eps=0.1) {
         min.s=1, max.s=sum(s), n.subpops=min(sum(s), 100),
         rough.interval=rough.interval)
 
-    cat(sprintf("fcontrol: dp=%d, max.s=%d (%d), n.subpops=%d, min=%d, max=%d\n",
-        germ.df$dp[1], nrow(som.df), sum(s), min(nrow(som.df),100),
-        as.integer(approx.ns[1]), as.integer(approx.ns[2])))
+    if (!quiet) {
+        cat(sprintf("fcontrol: dp=%d, max.s=%d (%d), n.subpops=%d, min=%d, max=%d\n",
+            germ.df$dp[1], nrow(som.df), sum(s), min(nrow(som.df),100),
+            as.integer(approx.ns[1]), as.integer(approx.ns[2])))
+    }
     pops <- lapply(approx.ns, function(n) {
         #        nt <- pmax(n*(g/sum(g))*1*(s > 0), 0.1)
         nt <- pmax(n*(g/sum(g)), eps)
@@ -340,7 +398,7 @@ fcontrol <- function(germ.df, som.df, bins=20, rough.interval=0.99, eps=0.1) {
 }
 
 
-compute.fdr.prior.data.for.candidates <- function(candidates, hsnps, bins=20, random.seed=0, quiet=FALSE, eps=0.1)
+compute.fdr.prior.data.for.candidates <- function(candidates, hsnps, bins=20, random.seed=0, quiet=FALSE, eps=0.1, legacy=FALSE)
 {
     if (nrow(hsnps) == 0 & nrow(candidates) > 0)
         stop(paste('0 hsnps provided but', nrow(candidates), 'candidate sites provided'))
@@ -364,23 +422,49 @@ compute.fdr.prior.data.for.candidates <- function(candidates, hsnps, bins=20, ra
         max.dp <- 0
 
     progressr::with_progress({
-        p <- progressr::progressor(along=0:(max.dp+1))
-        # These simulations really aren't slow enough to necessitate parallelizing
-        #fcs <- future.apply::future_lapply(0:max.dp, function(thisdp) {
-        fcs <- lapply(0:max.dp, function(thisdp) {
-            ret <- fcontrol(germ.df=hsnps[dp == thisdp],
-                    som.df=candidates[dp == thisdp],
-                    bins=bins, eps=eps)
-            p()
-            ret
-        })
-        #}, future.seed=0)
-        fc.max <- fcontrol(germ.df=hsnps[dp > max.dp],
-                    som.df=candidates[dp > max.dp],
-                    bins=bins, eps=eps)
-        p()
-    })
-    fcs <- c(fcs, list(fc.max))
+        if (!quiet) p <- progressr::progressor(along=0:(max.dp+1))
+
+        # future_lapply makes it a little difficult to obtain legacy output because of
+        # different handling of random seeds. it's probably possible to set future
+        # parameters to use a single seed=0 MersenneTwister RNG, but i haven't 
+        # explored that.
+        if (legacy) {
+            fcs <- lapply(c(0:max.dp), function(thisdp) {
+                germ.df <- hsnps[dp == thisdp]
+                som.df <- candidates[dp == thisdp]
+                ret <- fcontrol(germ.df=germ.df, som.df=som.df, bins=bins, eps=eps, quiet=quiet)
+                if (!quiet) p()
+                ret
+            })
+            fc.max <- fcontrol(germ.df=hsnps[dp > max.dp],
+                som.df=candidates[dp > max.dp],
+                bins=bins, eps=eps, quiet=quiet)
+            if (!quiet) p()
+            fcs <- c(fcs, list(fc.max))
+        } else {
+            # non-legacy mode just parallelizes this step.  same strategy is used.
+            # use a special value of NA to signal the last depth bucket
+            hsnps.by.depth <- lapply(c(0:max.dp,NA), function(thisdp) {
+                if (is.na(thisdp)) {
+                    # only the af and dp columns are used, don't copy the whole table
+                    germ.df <- hsnps[dp > max.dp,.(af, dp)]
+                    som.df <- candidates[dp > max.dp,.(af, dp)]
+                } else {
+                    germ.df <- hsnps[dp == thisdp,.(af, dp)]
+                    som.df <- candidates[dp == thisdp,.(af, dp)]
+                }
+                list(germ.df=germ.df, som.df=som.df)
+            })
+
+            fcs <- future.apply::future_lapply(hsnps.by.depth, function(thisdp) {
+                ret <- fcontrol(germ.df=thisdp$germ.df, som.df=thisdp$som.df, bins=bins, eps=eps, quiet=quiet)
+                if (!quiet) p()
+                ret
+            },
+            future.seed=0,
+            future.globals=c('bins', 'eps', 'quiet'))
+        }
+    }, enable=TRUE)
 
     # randomness done (used only in fcontrol())
     RNGkind(orng[1])
@@ -434,7 +518,8 @@ compute.fdr.prior.data.for.candidates <- function(candidates, hsnps, bins=20, ra
         # partially adjusted N_T/N_A scores for hSNPs.
         eps=eps, b.vec=b.vec, g.tab=g.tab, s.tab=s.tab,
         nt.tab=nt.tab, na.tab=na.tab,
-        ghet.loo.nt.tab=ghet.loo.nt.tab, ghet.loo.na.tab=ghet.loo.na.tab)
+        ghet.loo.nt.tab=ghet.loo.nt.tab, ghet.loo.na.tab=ghet.loo.na.tab,
+        mode=ifelse(legacy, 'legacy', 'new'))
 }
 
 make.nt.tab <- function(prior.data) {
@@ -487,11 +572,11 @@ estimate.fdr.priors.old <- function(candidates, prior.data)
 
 
 # New implementation of above using tables rather than loops
-estimate.fdr.priors <- function(candidates, prior.data, use.ghet.loo=FALSE)
+# Update: try not to pass the whole @gatk table to avoid memory duplication
+estimate.fdr.priors <- function(dp, af, prior.data, use.ghet.loo=FALSE)
 {
     # Assign each candidate mutation to a (VAF, DP) bin
-    dp <- candidates$dp
-    vafbin <- ceiling(candidates$af * prior.data$bins)
+    vafbin <- ceiling(af * prior.data$bins)
     vafbin[dp == 0 | vafbin == 0] <- 1
     dp.idx <- pmin(dp, prior.data$max.dp+1) + 1
 

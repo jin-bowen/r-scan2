@@ -17,15 +17,15 @@ integrated.table.meta.cols <- c(
     dbsnp='character',
     refnt='character',
     altnt='character',
-    mq='numeric',
-    mqrs='numeric',
     bulk.gt='character',
     bref='integer',
     balt='integer',
     bulk.dp='integer',
     bulk.af='numeric',
+    bulk.binom.prob='numeric',
     tref='integer',
     talt='integer',
+    tcells='integer',
     muttype='character',
     mutsig='character',
     balt.lowmq='integer',
@@ -38,6 +38,7 @@ integrated.table.meta.cols <- c(
     sum.out='integer',
     sum.bulk='integer',
     somatic.candidate='logical',
+    training.site='logical',
     resampled.training.site='logical'
 )
 read.integrated.table.1sample <- function(path, sample.id, region=NULL, quiet=FALSE) {
@@ -139,6 +140,10 @@ annotate.gatk.counts <- function(gatk.meta, gatk, bulk.sample, sc.samples, legac
         list(gatk[[bulk.idx]], gatk[[bulk.idx+1]], gatk[[bulk.idx+2]])]
     gatk.meta[, c('bulk.dp', 'bulk.af') := list(bref+balt, balt/(bref+balt))]
 
+    # One-sided binomial test that the site has 50% VAF in bulk. Alt hypothesis
+    # is that VAF < 50% (i.e., a somatic mosaic).
+    gatk.meta[, 'bulk.binom.prob' := pbinom(q=balt, size=bulk.dp, prob=1/2)]
+
     refs <- c()
     alts <- c()
     if (legacy) {
@@ -158,9 +163,12 @@ annotate.gatk.counts <- function(gatk.meta, gatk, bulk.sample, sc.samples, legac
     # especially bad when data.tables are nested in data.table formulae.
     tref.var <- rowSums(as.matrix(gatk[, ..refs])) - gatk.meta$bref
     talt.var <- rowSums(as.matrix(gatk[, ..alts])) - gatk.meta$balt
+    just.cell.alts <- which(colnames(gatk) %in% sc.samples) + 2
+    # how many cells have any supporting reads for this site
+    tcells.var <- rowSums(as.matrix(gatk[, ..just.cell.alts]) > 0)
 
     # Annotate the total number of single cell alt and ref reads across all SC samples.
-    gatk.meta[, c('tref', 'talt') := list(tref.var, talt.var)]
+    gatk.meta[, c('tref', 'talt', 'tcells') := list(tref.var, talt.var, tcells.var)]
     gatk.meta
 }
 
@@ -219,11 +227,10 @@ annotate.gatk.lowmq <- function(gatk, path, bulk, region, quiet=FALSE) {
 
 
 # 'gatk' is a data.table to be modified by reference
-# 'phasing.path' points to a phased VCF output by either SHAPEIT or EAGLE
-# with sample column 'phasedgt'. The VCF file must have a header line
-# beginning with #CHROM, as is usual for the VCF spec.
 #
-# IMPORTANT: this VCF contains no information about single cells, only bulk.
+# 'phasing.path' points to a bgzipped, tabix indexed 5 column table with format:
+#       chr, pos, refnt, altnt, phased GT string
+# N.B., the first column name must be "chr"
 #
 # to allow the very simple table join to work well, we assume phasing was
 # restricted to biallelic sites for this individual. while not ideal, the
@@ -233,25 +240,18 @@ annotate.gatk.lowmq <- function(gatk, path, bulk, region, quiet=FALSE) {
 # phase needs to be joined to a single cell table with alt and ref read
 # counts. Based on phase, (alt,ref) maps to either (hap1,hap2) or (hap2,hap1).
 annotate.gatk.phasing <- function(gatk, phasing.path, region, quiet=FALSE) {
-    # VCF column 1 should be named "CHROM"
     phase.data <- read.tabix.data(path=phasing.path, region=region, quiet=quiet,
-        colClasses=list(character='CHROM'))
+        colClasses=list(character='chr'))
 
-    if (ncol(phase.data) != 10)
-        stop('expected single-sample VCF format with 10 columns')
+    if (ncol(phase.data) != 5)
+        stop('expected 5 column table')
 
-    # phasing.path is a single sample standard VCF, so we specify the column
-    # format explicitly.
-    colnames(phase.data) <- c('chr', 'pos', 'dbsnp', 'refnt', 'altnt', 'qual', 'filter', 'info', 'format', 'phasedgt')
+    colnames(phase.data) <- c('chr', 'pos', 'refnt', 'altnt', 'phasedgt')
 
-    # This assumes "GT" is the first element of the GT string format, which isn't
-    # guaranteed but is the case for our data.
-
-    unrecognized <- setdiff(unique(phase.data$phasedgt), c('1|0', '0|1', './.'))
+    unrecognized <- setdiff(unique(phase.data$phasedgt), c('1|1', '1|0', '0|1', './.'))
     if (length(unrecognized) > 0)
-        stop(paste('phasing genotypes expected to be either 0|1, 1|0 or ./., but found', unrecognized, collapse='\n'))
+        stop(paste('phasing genotypes expected to be either 1|1, 0|1, 1|0 or ./., but found', unique(unrecognized), collapse='\n'))
 
-    # First join the phase genotype (string is either 0|1, 1|0 or ./. if no call)
     gatk[phase.data, on=.(chr,pos,refnt,altnt), phased.gt := i.phasedgt]
 }
 
@@ -291,9 +291,14 @@ annotate.gatk.panel <- function(gatk, panel.path, region=NULL, quiet=FALSE) {
 # a mutation locus, meaning the site may be a candidate in at least one single
 # cell.
 #
-# XXX: any filter not dependent on specific single cell info (like min.bulk.dp)
-# should really be applied here.
-annotate.gatk.candidate.loci <- function(gatk, snv.min.bulk.dp, snv.max.bulk.alt, snv.max.bulk.af, indel.min.bulk.dp, indel.max.bulk.alt, indel.max.bulk.af, mode=c('new', 'legacy')) {
+# if max.bulk.af or max.bulk.binom.prob are 1, then the filter would not remove
+# any sites (except perhaps NA/NaNs).  When that is the case, do not change
+# behavior w.r.t. requiring bulk.gt=0/0.
+#
+# Any filter not dependent on specific single cell info (e.g., min.bulk.dp)
+# should be applied here.
+annotate.gatk.candidate.loci <- function(gatk, snv.min.bulk.dp, snv.max.bulk.alt, snv.max.bulk.af, snv.max.bulk.binom.prob, indel.min.bulk.dp, indel.max.bulk.alt, indel.max.bulk.af, indel.max.bulk.binom.prob, mode=c('new', 'legacy'))
+{
     mode <- match.arg(mode)
 
     # In legacy mode, bulk depth and bulk alt reads in the low MMQ GATK table
@@ -301,21 +306,23 @@ annotate.gatk.candidate.loci <- function(gatk, snv.min.bulk.dp, snv.max.bulk.alt
     # from single cell to single cell, we prefer to handle them here.
     # bulk.af was never checked because max bulk alt was always 0 in legacy.
     if (mode == 'new') {
-        snv.allow.bulk.gt <- snv.max.bulk.alt > 0 | snv.max.bulk.af > 0
-        indel.allow.bulk.gt <- indel.max.bulk.alt > 0 | indel.max.bulk.af > 0
+        snv.allow.bulk.gt <- snv.max.bulk.alt > 0 | (snv.max.bulk.af < 1 & snv.max.bulk.af > 0) | (snv.max.bulk.binom.prob < 1 & snv.max.bulk.binom.prob > 0)
+        indel.allow.bulk.gt <- indel.max.bulk.alt > 0 | (indel.max.bulk.af < 1 & indel.max.bulk.af > 0) | (indel.max.bulk.binom.prob < 1 & indel.max.bulk.binom.prob > 0)
 
         gatk[, somatic.candidate :=
             ((muttype == 'snv' & balt <= snv.max.bulk.alt & 
-                    bulk.dp >= snv.min.bulk.dp &
-                    !is.na(bulk.af) & bulk.af <= snv.max.bulk.af &
-                    (is.na(balt.lowmq) | balt.lowmq <= snv.max.bulk.alt) &
-                    # to continue old SCAN2 (intended for non-clonal calling) behavior, require
-                    # bulk.gt==0/0 when the user doesn't allow any bulk read support.
-                    (snv.allow.bulk.gt | bulk.gt == '0/0')
+                bulk.dp >= snv.min.bulk.dp &
+                !is.na(bulk.af) & bulk.af <= snv.max.bulk.af &
+                !is.na(bulk.binom.prob) & bulk.binom.prob <= snv.max.bulk.binom.prob &
+                (is.na(balt.lowmq) | balt.lowmq <= snv.max.bulk.alt) &
+                # to continue old SCAN2 (intended for non-clonal calling) behavior, require
+                # bulk.gt==0/0 when the user doesn't allow any bulk read support.
+                (snv.allow.bulk.gt | bulk.gt == '0/0')
             ) |
             (muttype == 'indel' & balt <= indel.max.bulk.alt &
                 bulk.dp >= indel.min.bulk.dp &
                 !is.na(bulk.af) & bulk.af <= indel.max.bulk.af &
+                !is.na(bulk.binom.prob) & bulk.binom.prob <= indel.max.bulk.binom.prob &
                 (is.na(balt.lowmq) | balt.lowmq <= indel.max.bulk.alt) &
                 (indel.allow.bulk.gt | bulk.gt == '0/0')
             )) &
@@ -348,32 +355,39 @@ annotate.gatk.candidate.loci <- function(gatk, snv.min.bulk.dp, snv.max.bulk.alt
 #      CIGAR op filters (indel ops) is actually incorrect either way.
 # In any case, this likely has a relatively insignificant effect so we are leaving it as
 # it was in legacy calling for now.
-gatk.resample.phased.sites <- function(gatk, M=20, seed=0) {
+gatk.select.and.resample.training.sites <- function(gatk, haploid.chroms, M=20, seed=0) {
     ret <- list()
+
+    # First set the training sites. This does not exactly match legacy SCAN2, which
+    # excluded training sites based on one single cell characteristic (having phased GT!=./.)
+    gatk[, training.site := !is.na(phased.gt) &
+        # diploid chroms: 0|1 and 1|0 hets are informative, hom 1|1 are not
+        ((!(chr %in% haploid.chroms) & (!is.na(phased.gt) & phased.gt == '0|1' | phased.gt == '1|0')) |
+        # haploid chroms: 0|1 and 1|0 hets are artifacts and hom 1|1 is informative
+            (chr %in% haploid.chroms & !is.na(phased.gt) & phased.gt == '1|1')) & bulk.gt != './.']
+
     for (mt in c('snv', 'indel')) {
         aux.data <- resample.germline(
             sites=gatk[somatic.candidate == TRUE & muttype == mt],
-            hsnps=gatk[!is.na(phased.gt) & phased.gt != './.' & muttype == mt],
+            hsnps=gatk[training.site == TRUE & muttype == mt],
             M=M, seed=seed)
 
-        # aux.data$selection is aligned to the input 'hsnps' table
-        # FIXME: resampled.training.site here assumes that all phased sites are
-        # training sites. This is legacy behavior, but isn't ideal.
-        gatk[!is.na(phased.gt) & phased.gt != './.' & muttype == mt,
+        # aux.data$selection is aligned to the 'hsnps' table above in resample.germline()
+        gatk[training.site == TRUE & muttype == mt,
             resampled.training.site := aux.data$selection$keep]
         ret[[mt]] <- aux.data
     }
 
     gatk[is.na(resampled.training.site), resampled.training.site := FALSE]
 
-    # reorder columns so that resampled.training.site, applicable to all single
-    # cells in the integrated table, is in the left block of columns. the right block of
+    # reorder columns so that training.site and resampled.training.site, applicable to all single
+    # cells in the integrated table, are in the left block of columns. the right block of
     # columns is intended to only contain per-sample read count data.
     #
     # must use column numbers because column names are not unique: each sample has a 'ref'
     # and 'alt' column.
     n.meta.cols <- length(integrated.table.meta.cols)
-    data.table::setcolorder(gatk, neworder=c(1:(n.meta.cols-1), ncol(gatk), n.meta.cols:(ncol(gatk)-1)))
+    data.table::setcolorder(gatk, neworder=c(1:(n.meta.cols-2), ncol(gatk)-1:0, (n.meta.cols-1):(ncol(gatk)-2)))
 
     return(ret)
 }

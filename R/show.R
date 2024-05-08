@@ -1,5 +1,9 @@
 setMethod("show", "SCAN2", function(object) {
     cat("#", is(object)[[1]], "\n")
+    cat("# r-scan2 package version:", object@package.version, "\n")
+    cat(paste0("# SCAN2 pipeline version: ", object@pipeline.version['version'],
+        ", buildnum: ", object@pipeline.version['buildnum'],
+        ", githash: ", object@pipeline.version['githash'], '\n'))
     if (!is.null(object@region)) {
         cat("#   Region:")
         if (length(object@region) > 1) {
@@ -10,8 +14,10 @@ setMethod("show", "SCAN2", function(object) {
         }
     }
     cat("#   Genome:", object@genome.string, "\n")
+    cat("#   Amplification protocol:", object@amplification, "\n")
     cat("#   Single cell ID:", object@single.cell, "\n")
     cat("#   Bulk ID:", object@bulk, "\n")
+    cat("#   Sex assigned at birth:", object@sex, "\n")
 
     show.gatk(object)
     show.abmodel(object)
@@ -32,11 +38,7 @@ setMethod("show.gatk", "SCAN2", function(object) {
     if (is.null(object@gatk)) {
         cat(" (no data)\n")
     } else {
-        if (is.compressed(object)) {
-            cat(' (compressed)\n')
-        } else {
-            cat('', nrow(object@gatk), "raw sites\n")
-        }
+        cat('', nrow(object@gatk), "raw sites\n")
     }
 })
 
@@ -44,32 +46,30 @@ setMethod("show.gatk", "SCAN2", function(object) {
 setGeneric("show.abmodel.training.sites", function(object) standardGeneric("show.abmodel.training.sites"))
 setMethod("show.abmodel.training.sites", "SCAN2", function(object) {
     cat("#   AB model training hSNPs:")
-    if (is.compressed(object)) {
-        cat(' (table compressed)\n')
+    if (!('training.site' %in% colnames(object@gatk))) {
+        cat(" (no data)\n")
+    } else if (nrow(object@gatk[training.site==TRUE]) == 0) {
+        cat(" (training data removed, likely minimized SCAN2 object)\n")
     } else {
-        if (!('training.site' %in% colnames(object@gatk))) {
-            cat(" (no data)\n")
-        } else if (nrow(object@gatk[training.site==TRUE]) == 0) {
-            cat(" (training data removed, likely minimized SCAN2 object)\n")
-        } else {
-            # germline indels are not used for AB model training
-            per.hap <- object@gatk[training.site==TRUE & muttype == 'snv', .N, by=phased.gt]
-            tdata <- object@gatk[training.site==TRUE & muttype=='snv']
-            cat('', nrow(tdata),
-                sprintf("phasing: %s=%d, %s=%d\n",
-                    per.hap$phased.gt[1], per.hap$N[1],
-                    per.hap$phased.gt[2], per.hap$N[2]))
-            neighbor.approx <- approx.abmodel.covariance(object, bin.breaks=10^(0:5))
-            cors <- round(neighbor.approx$observed.cor, 3)
-                cat('#       OBSERVED VAF correlation between neighboring hSNPs:\n')
-            cat('#           <10 bp', cors[1], '<100 bp', cors[2],
-                '<1000 bp', cors[3], '<10 kbp', cors[4], '<100 kbp', cors[5], '\n')
-            if ('resampled.training.site' %in% colnames(object@gatk)) {
-                cat('#        ', nrow(object@gatk[resampled.training.site == TRUE & muttype == 'snv']),
-                    'resampled hSNPs\n')
-                cat('#        ', nrow(object@gatk[resampled.training.site == TRUE & muttype == 'indel']),
-                    'resampled hIndels\n')
-            }
+        # germline indels are not used for AB model training
+        per.hap <- object@gatk[training.site==TRUE & muttype == 'snv', .N, by=phased.gt]
+        tdata <- object@gatk[training.site==TRUE & muttype=='snv']
+        cat('', nrow(tdata),
+            sprintf("phasing: %s=%d, %s=%d\n",
+                per.hap$phased.gt[1], per.hap$N[1],
+                per.hap$phased.gt[2], per.hap$N[2]))
+        neighbor.approx <- approx.abmodel.covariance(object, bin.breaks=10^(0:5))
+        # Get average AB model covariance over chroms; do not consider sex chroms
+        neighbor.approx <- neighbor.approx[!(chr %in% get.sex.chroms(object)), .(observed.cor=mean(observed.cor, na.rm=TRUE)), by=cut]
+        cors <- round(neighbor.approx$observed.cor, 3)
+            cat('#       OBSERVED VAF correlation between neighboring hSNPs:\n')
+        cat('#           <10 bp', cors[1], '<100 bp', cors[2],
+            '<1000 bp', cors[3], '<10 kbp', cors[4], '<100 kbp', cors[5], '\n')
+        if ('resampled.training.site' %in% colnames(object@gatk)) {
+            cat('#        ', nrow(object@gatk[resampled.training.site == TRUE & muttype == 'snv']),
+                'resampled hSNPs\n')
+            cat('#        ', nrow(object@gatk[resampled.training.site == TRUE & muttype == 'indel']),
+                'resampled hIndels\n')
         }
     }
 })
@@ -78,14 +78,14 @@ setMethod("show.abmodel.training.sites", "SCAN2", function(object) {
 setGeneric("show.abmodel.params", function(object) standardGeneric("show.abmodel.params"))
 setMethod("show.abmodel.params", "SCAN2", function(object) {
     cat("#   AB model parameters:")
-    if (is.null(object@ab.fits)) {
+    if (is.null(ab.fits(object))) {
         cat(" (no data)\n")
     } else {
         cat(sprintf('\n#       average (over chromosomes): a=%0.3f, b=%0.3f, c=%0.3f, d=%0.3f\n',
-            mean(object@ab.fits$a),
-            mean(object@ab.fits$b),
-            mean(object@ab.fits$c),
-            mean(object@ab.fits$d)))
+            mean(ab.fits(object)$a),
+            mean(ab.fits(object)$b),
+            mean(ab.fits(object)$c),
+            mean(ab.fits(object)$d)))
     }
 })
 
@@ -93,24 +93,20 @@ setMethod("show.abmodel.params", "SCAN2", function(object) {
 setGeneric("show.abmodel.ab.distn", function(object) standardGeneric("show.abmodel.ab.distn"))
 setMethod("show.abmodel.ab.distn", "SCAN2", function(object) {
     cat("#   Allele balance:")
-    if (is.compressed(object)) {
-        cat(' (table compressed)\n')
-    } else { 
-        if (is.null(object@ab.estimates)) {
-            cat(" (not computed)\n")
-        } else {
-            s <- summary(object@gatk$gp.sd)
-            cat('\n#       mean (0 is neutral):',
-                round(mean(object@gatk$gp.mu), 3), '\n')
-            cat('#       uncertainty (Q25, median, Q75):',
-                round(s['1st Qu.'], 3),
-                round(s['Median'], 3),
-                round(s['3rd Qu.'], 3), '\n')
-            if ('training.site' %in% colnames(object@gatk) & nrow(object@gatk[training.site==TRUE]) > 0) {
-                xs <- round(object@gatk[training.site==TRUE & muttype == 'snv',
-                    .(mean=mean(gp.mu), cor=cor(af, ab, use='complete.obs'))],3)
-                cat('#       mean at training hSNPs:', xs$mean, '\n')
-            }
+    if (is.null(object@ab.estimates)) {
+        cat(" (not computed)\n")
+    } else {
+        s <- summary(object@gatk$gp.sd)
+        cat('\n#       mean (0 is neutral):',
+            round(mean(object@gatk$gp.mu), 3), '\n')
+        cat('#       uncertainty (Q25, median, Q75):',
+            round(s['1st Qu.'], 3),
+            round(s['Median'], 3),
+            round(s['3rd Qu.'], 3), '\n')
+        if ('training.site' %in% colnames(object@gatk) & nrow(object@gatk[training.site==TRUE]) > 0) {
+            xs <- round(object@gatk[training.site==TRUE & muttype == 'snv',
+                .(mean=mean(gp.mu), cor=cor(af, ab, use='complete.obs'))],3)
+            cat('#       mean at training hSNPs:', xs$mean, '\n')
         }
     }
 })
@@ -150,21 +146,17 @@ setMethod("show.cigar.data", "SCAN2", function(object) {
 setGeneric("show.static.filters", function(object) standardGeneric("show.static.filters"))
 setMethod("show.static.filters", "SCAN2", function(object) {
     cat("#   Static filters: ")
-    if (is.compressed(object)) {
-        cat(' (table compressed)\n')
+    if (!('static.filter' %in% colnames(object@gatk))) {
+        cat("(not applied)\n")
     } else {
-        if (!('static.filter' %in% colnames(object@gatk))) {
-            cat("(not applied)\n")
-        } else {
-            if ('mode' %in% names(object@static.filter.params))  # supporting older versions of SCAN2 objects
-                cat(paste0('mode=', object@static.filter.params$mode))
-            cat('\n')
-            na.or.val <- function(x, val=0) ifelse(is.na(x), val, x)
-            for (mt in c('snv', 'indel')) {
-                tb <- table(object@gatk[muttype == mt, static.filter], useNA='always')
-                cat(sprintf('#       %6s: %8d retained %8d removed %8d NA\n',
-                    mt, na.or.val(tb['TRUE']), na.or.val(tb['FALSE']), na.or.val(tb['NA'])))
-            }
+        if ('mode' %in% names(object@static.filter.params))  # supporting older versions of SCAN2 objects
+            cat(paste0('mode=', object@static.filter.params$mode))
+        cat('\n')
+        na.or.val <- function(x, val=0) ifelse(is.na(x), val, x)
+        for (mt in c('snv', 'indel')) {
+            tb <- table(object@gatk[muttype == mt, static.filter], useNA='always')
+            cat(sprintf('#       %6s: %8d retained %8d removed %8d NA\n',
+                mt, na.or.val(tb['TRUE']), na.or.val(tb['FALSE']), na.or.val(tb['NA'])))
         }
     }
 })
@@ -244,11 +236,13 @@ setMethod("show.mutburden", "SCAN2", function(object) {
         cat('\n')
         for (mt in c('snv', 'indel')) {
             mb <- object@mutburden[[mt]][2,]  # row 2 is middle 50%
-            cat(sprintf("#       %6s: %6d somatic,   %0.1f%% sens,   %0.3f callable Gbp,   %0.1f muts/haploid Gbp,   %0.1f muts per genome%s%s\n",
+            cat(sprintf("#       %6s: %6d somatic,   %0.1f%% sens,   %0.3f callable Gbp,   %0.1f muts/haploid Gbp,   %0.1f muts per genome%s%s%s\n",
                 mt, mb$ncalls, 100*mb$callable.sens, mb$callable.bp/1e9, mb$rate.per.gb, mutburden(object, muttype=mt),
+                # all "reason" entries are identical
+                ifelse(any(mb$reason != ''), paste0(' (INVALID: ', mb$reason[1], ')'), ''),
                 ifelse(any(mb$unsupported.filters), ' (INVALID: static.filter.params)', ''),
                 ifelse(mt=='indel' & (object@call.mutations$suppress.all.indels | object@call.mutations$suppress.shared.indels), ' (INVALID: cross-sample panel insufficient)', '')
-                ))
+            ))
         }
     }
 })
