@@ -115,11 +115,6 @@ genome.string.to.tiling <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.0', 'mm1
     } else if (genome == 'mm10') {
         species <- 'Mus_musculus'
     } else {
-        # shouldn't be possible
-        stop("unsupported genoome string")
-    }
-
-    } else {
         version.string <- paste(v$Version, v$Date, sep='-')
         attr(version.string, 'source') <- 'package_metadata'
         return(version.string)
