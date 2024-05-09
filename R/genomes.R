@@ -22,6 +22,12 @@ get.gbp.by.genome <- function(object) {
         chry <- 91744698
         chrm <- 16299
         return((total - chrx - chry - chrm)*2 / 1e9) # = 4.936158956
+    } else if (object@genome.string == 'CHM13v2.0') {
+        total <- 3117292070
+        chrx <- 154259566
+        chry <- 62460029
+        chrm <- 16569
+        return((total - chrx - chry - chrm)*2 / 1e9)
     } else {
         warn(paste('gbp not yet implemented for genome', object@genome.string))
         warn("the mutation burden for this analysis is a placeholder!")
@@ -51,28 +57,16 @@ get.gbp.by.genome <- function(object) {
 # queried. However, new installations of SCAN2 will likely use newer
 # bioconductor packages, leading to mismatches between our distributed
 # Seqinfo objects and the BSgenome packages.
-genome.string.to.seqinfo.object <- function(genome=c('hs37d5', 'hg38', 'mm10'), update=FALSE) {
+genome.string.to.seqinfo.object <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.0', 'mm10')) {
     genome <- match.arg(genome)
-
-    update.or.return <- function(file.tag) {
-        f <- system.file('extdata', paste0(genome, '___', file.tag, '.rda'), package='scan2')
-        if (update) {
-            cat(paste0('Updating internal SCAN2 Seqinfo object for genome ', genome, ' (=', file.tag, ')\n'))
-            cat("Fetching from UCSC or NCBI servers..\n")
-            seqinfo <- GenomeInfoDb::Seqinfo(genome=file.tag)
-            save(seqinfo, file=f, compress=FALSE)
-        } else {
-            seqinfo <- get(load(f))
-        }
-        return(seqinfo)
-    }
-
     if (genome == 'hs37d5') {
-        return(update.or.return('GRCh37.p13'))
+        return(GenomeInfoDb::Seqinfo(genome='GRCh37.p13'))
     } else if (genome == 'hg38') {
-        return(update.or.return('hg38'))
+        return(GenomeInfoDb::Seqinfo(genome='hg38'))
+    } else if (genome == 'CHM13v2.0') {
+	return(GenomeInfoDb::Seqinfo(genome='hs1'))
     } else if (genome == 'mm10') {
-        return(update.or.return('mm10'))
+        return(GenomeInfoDb::Seqinfo(genome='mm10'))
     } else {
         # shouldn't be possible
         stop("unsupported genome string")
@@ -80,11 +74,12 @@ genome.string.to.seqinfo.object <- function(genome=c('hs37d5', 'hg38', 'mm10'), 
 }
 
 
+
 # Avoid this function when possible.  Attaching the BSgenome packages consumes a
 # large amount of memory and, due to using the futures package (which forks the
 # main R process) for our parallelization, that memory usage is multiplied by
 # the number of parallel cores used.
-genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'mm10')) {
+genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'CHM13v2.0','mm10')) {
     genome <- match.arg(genome)
 
     if (genome == 'hs37d5') {
@@ -93,6 +88,9 @@ genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'mm10'))
     } else if (genome == 'hg38') {
         require(BSgenome.Hsapiens.UCSC.hg38)
         genome <- BSgenome.Hsapiens.UCSC.hg38
+    } else if (genome == 'CHM13v2.0') {
+        require(BSgenome.Hsapiens.UCSC.hs1)
+	genome <- BSgenome.Hsapiens.UCSC.hs1
     } else if (genome == 'mm10') {
         require(BSgenome.Mmusculus.UCSC.mm10)
         genome <- BSgenome.Mmusculus.UCSC.mm10
@@ -104,6 +102,7 @@ genome.string.to.bsgenome.object <- function(genome=c('hs37d5', 'hg38', 'mm10'))
 }
 
 
+
 genome.string.to.chroms <- function(genome,
     sqi=genome.string.to.seqinfo.object(genome),
     group=c('auto', 'sex', 'circular', 'all'))
@@ -113,6 +112,8 @@ genome.string.to.chroms <- function(genome,
     if (genome == 'hs37d5') {
         species <- 'Homo_sapiens'
     } else if (genome == 'hg38') {
+        species <- 'Homo_sapiens'
+    } else if (genome == 'CHM13v2.0') {
         species <- 'Homo_sapiens'
     } else if (genome == 'mm10') {
         species <- 'Mus_musculus'
@@ -128,7 +129,7 @@ genome.string.to.chroms <- function(genome,
 
 haploid.chroms <- function(object) {
     haploid.chroms <- c()
-    if (object@genome.string == 'hs37d5' | object@genome.string == 'hg38') {
+    if (object@genome.string == 'hs37d5' | object@genome.string == 'hg38' |  object@genome.string == 'CHM13v2.0') {
         if (object@sex == 'male')
             haploid.chroms <- genome.string.to.chroms(object@genome.string, group='sex')
     } else if (object@genome.string == 'mm10') {
@@ -160,7 +161,7 @@ get.sex.chroms <- function(object) {
 # They likely do not work well for highly non-contiguous sets like exomes.
 ######################################################################################
 
-genome.string.to.tiling <- function(genome=c('hs37d5', 'hg38', 'mm10'), tilewidth=10e6, group=c('auto', 'sex', 'circular', 'all')) {
+genome.string.to.tiling <- function(genome=c('hs37d5', 'hg38','CHM13v2.0', 'mm10'), tilewidth=10e6, group=c('auto', 'sex', 'circular', 'all')) {
     genome <- match.arg(genome)
     group <- match.arg(group)
 
